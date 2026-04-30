@@ -12,8 +12,8 @@ from model import SLRNet
 from extract_keypoints import mediapipe_detection, draw_landmarks, extract_keypoints
 
 
-MODEL_PATH      = "outputs/model_best.pt"
-LABEL_MAP_PATH  = "processed/label_map.json"
+MODEL_PATH      = "outputs/model_best.pth"
+LABEL_MAP_PATH  = "outputs/label_map.json"
 SEQUENCE_LENGTH = 30
 THRESHOLD       = 0.6     
 TOP_K           = 3       
@@ -28,18 +28,39 @@ COL_WHITE       = (240, 240, 240)
 COL_GRAY        = (120, 120, 120)
 
 
+def _resolve_model_path(model_path: str) -> str:
+    """Try the given path first, then swap .pt/.pth extension as fallback."""
+    if os.path.isfile(model_path):
+        return model_path
+    # Try the other extension
+    base, ext = os.path.splitext(model_path)
+    alt_ext = ".pt" if ext == ".pth" else ".pth"
+    alt_path = base + alt_ext
+    if os.path.isfile(alt_path):
+        print(f"  [INFO] '{model_path}' not found, using '{alt_path}' instead.")
+        return alt_path
+    raise FileNotFoundError(
+        f"Model file not found: tried '{model_path}' and '{alt_path}'.\n"
+        f"Please download model_best.pth from Kaggle and place it in the outputs/ directory."
+    )
+
+
 def load_model_and_labels(model_path: str, label_map_path: str):
     with open(label_map_path, encoding="utf-8") as f:
         label_map = json.load(f)
     idx_to_label = {v: k for k, v in label_map.items()}
     num_classes  = len(idx_to_label)
 
+    resolved_path = _resolve_model_path(model_path)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model  = SLRNet(input_size=1662, num_classes=num_classes).to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(resolved_path, map_location=device,
+                                      weights_only=True))
     model.eval()
 
-    print(f"  → Model loaded: {num_classes} classes | Device: {device}")
+    print(f"  -> Model loaded from: {resolved_path}")
+    print(f"  -> {num_classes} classes | Device: {device}")
     return model, idx_to_label, device
 
 
