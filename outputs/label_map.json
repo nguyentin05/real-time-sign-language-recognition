@@ -1,0 +1,12 @@
+{
+  "FINISH": 0,
+  "FRIEND": 1,
+  "MANY": 2,
+  "NIGHT": 3,
+  "READ": 4,
+  "START": 5,
+  "WATER": 6,
+  "WHERE": 7,
+  "WRITE": 8,
+  "YOU": 9
+}
