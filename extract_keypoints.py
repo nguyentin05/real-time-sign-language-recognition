@@ -30,13 +30,17 @@ def mediapipe_detection(image, model):
 
     Returns:
         image  : Original BGR image (unchanged)
-        results: MediaPipe detection results
+        results: MediaPipe detection results (None if detection failed)
     """
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image_rgb.flags.writeable = False
-    results = model.process(image_rgb)
-    image_rgb.flags.writeable = True
-    return image, results
+    try:
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_rgb.flags.writeable = False
+        results = model.process(image_rgb)
+        image_rgb.flags.writeable = True
+        return image, results
+    except Exception as e:
+        print(f"  [WARN] MediaPipe detection failed: {e}")
+        return image, None
 
 
 def draw_landmarks(image, results):
@@ -88,11 +92,13 @@ def extract_keypoints(results):
     Returns a 1662-dim numpy array. Missing landmarks are zero-filled.
 
     Args:
-        results: MediaPipe detection results
+        results: MediaPipe detection results (can be None)
 
     Returns:
         np.ndarray of shape (1662,)
     """
+    if results is None:
+        return np.zeros(33 * 4 + 468 * 3 + 21 * 3 + 21 * 3)
     # Pose: 33 landmarks × 4 values = 132
     if results.pose_landmarks:
         pose = np.array([[lm.x, lm.y, lm.z, lm.visibility]

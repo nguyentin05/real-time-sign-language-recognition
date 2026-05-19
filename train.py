@@ -164,6 +164,23 @@ def main(args):
     # Save label map for inference
     save_label_map(class_names, args.output_dir)
 
+    # Save training config for reproducibility
+    train_config = {
+        "input_size": int(INPUT_SIZE),
+        "seq_len": int(SEQ_LEN),
+        "num_classes": int(NUM_CLASSES),
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "epochs": args.epochs,
+        "patience": args.patience,
+        "data_dir": args.data_dir,
+        "class_names": list(class_names),
+    }
+    config_path = os.path.join(args.output_dir, "train_config.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(train_config, f, indent=2, ensure_ascii=False)
+    print(f"  → Saved training config: {config_path}")
+
     # ── Training loop ───────────────────────────────────────────────────
     best_val_loss    = float("inf")
     patience_counter = 0
