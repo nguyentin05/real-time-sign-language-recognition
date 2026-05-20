@@ -16,11 +16,11 @@ class SLRNet(nn.Module):
     """
     SLRNet: CNN-LSTM model for sign language recognition.
     
-    Input : (batch, seq_len, input_size)  e.g. (B, 30, 1662)
+    Input : (batch, seq_len, input_size)  e.g. (B, 30, 258)
     Output: (batch, num_classes)          logits (raw, no softmax)
 
     Args:
-        input_size  : Feature dimension per frame (default 1662 for MediaPipe holistic)
+        input_size  : Feature dimension per frame (default 258 for MediaPipe holistic without face)
         num_classes : Number of sign language classes (default 10)
     """
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     print(f"Device       : {device}")
     print(f"Total params : {total:,}")
 
-    dummy = torch.randn(2, 30, 1662).to(device)
+    dummy = torch.randn(2, 30, 258).to(device)
     out = model(dummy)
     print(f"Input shape  : {dummy.shape}")
     print(f"Output shape : {out.shape}")

@@ -1,11 +1,11 @@
 """
-dataset.py -- WLASL Sign Language Recognition
+preprocess.py -- WLASL Sign Language Recognition
 Dataset loader with frame sampling + augmentation
 
 Supports two modes:
   1. Video mode: loads raw .mp4 files, outputs (C, T, H, W) tensors
   2. Keypoint mode: loads raw .mp4 files, extracts MediaPipe keypoints,
-     outputs (T, 1662) tensors compatible with SLRNet
+      outputs (T, 258) tensors compatible with SLRNet
 
 Usage:
     # Video mode (for 3D Conv models)
@@ -16,6 +16,7 @@ Usage:
 """
 
 import os
+import sys
 import json
 import cv2
 import numpy as np
@@ -24,9 +25,14 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 from PIL import Image
 
+# ── Project root path setup ─────────────────────────────────────────────────
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-# ─── Default labels (loaded dynamically from outputs/label_map.json) ────────
-_DEFAULT_LABEL_MAP = os.path.join(os.path.dirname(__file__), "outputs", "label_map.json")
+
+# ─── Default labels (loaded dynamically from data/label_map.json) ───────────
+_DEFAULT_LABEL_MAP = os.path.join(ROOT, "data", "label_map.json")
 
 def _load_labels(label_map_path=_DEFAULT_LABEL_MAP):
     """Load labels from label_map.json. Falls back to default if not found."""
@@ -55,7 +61,7 @@ STD       = [0.229, 0.224, 0.225]
 
 # Keypoint mode settings
 KP_SEQ_LEN = 30    # SLRNet expects 30 frames
-KP_DIM     = 1662  # MediaPipe holistic keypoint dimension
+KP_DIM     = 258   # MediaPipe holistic keypoint dimension (no face)
 
 
 # ─── Utility ────────────────────────────────────────────────────────────────
@@ -107,7 +113,7 @@ def load_video_keypoints(path: str, seq_len: int = KP_SEQ_LEN) -> np.ndarray:
     Returns array (seq_len, 1662) float32.
     """
     try:
-        from extract_keypoints import extract_keypoints, mediapipe_detection
+        from src.data.extract_keypoints import extract_keypoints, mediapipe_detection
         import mediapipe as mp
     except ImportError:
         raise ImportError(
@@ -169,32 +175,15 @@ class WLASLVideoDataset(Dataset):
     """
     Video-frame based dataset.
     Output shape: (C, T, H, W) - suitable for 3D Conv models.
-
-    Directory structure:
-        root/
-          accident/
-            xxxxx.mp4
-            ...
-          bed/
-            ...
     """
 
-    def __init__(
-        self,
-        root: str,
-        split: str = "train",
-        seq_len: int = SEQ_LEN,
-        img_size: int = IMG_SIZE,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.10,
-        seed: int = 42,
-    ):
+    def __init__(self, root, split="train", seq_len=SEQ_LEN, img_size=IMG_SIZE,
+                 val_ratio=0.15, test_ratio=0.10, seed=42):
         self.root     = root
         self.seq_len  = seq_len
         self.img_size = img_size
         self.transform = get_transforms(train=(split == "train"))
 
-        # Collect all samples
         all_samples = []
         for label in LABELS:
             label_dir = os.path.join(root, label)
@@ -204,7 +193,6 @@ class WLASLVideoDataset(Dataset):
                 if fname.endswith(".mp4"):
                     all_samples.append((os.path.join(label_dir, fname), LABEL2IDX[label]))
 
-        # Shuffle and split
         rng = np.random.default_rng(seed)
         idxs = rng.permutation(len(all_samples))
         n_test = int(len(all_samples) * test_ratio)
@@ -214,7 +202,7 @@ class WLASLVideoDataset(Dataset):
             chosen = idxs[:n_test]
         elif split == "val":
             chosen = idxs[n_test:n_test + n_val]
-        else:  # train
+        else:
             chosen = idxs[n_test + n_val:]
 
         self.samples = [all_samples[i] for i in chosen]
@@ -225,11 +213,8 @@ class WLASLVideoDataset(Dataset):
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-
-        # (T, H, W, 3) -> apply transform per frame
         frames = load_video_frames(path, self.seq_len, self.img_size)
 
-        # Same spatial augmentation for all frames in the clip
         seed = np.random.randint(0, 2**31)
         tensor_frames = []
         for frame in frames:
@@ -238,12 +223,8 @@ class WLASLVideoDataset(Dataset):
             t = self.transform(img)
             tensor_frames.append(t)
 
-        # Stack -> (T, C, H, W)
         clip = torch.stack(tensor_frames, dim=0)
-
-        # Transpose to (C, T, H, W) for 3D Conv
-        clip = clip.permute(1, 0, 2, 3)
-
+        clip = clip.permute(1, 0, 2, 3)  # (C, T, H, W)
         return clip, label
 
 
@@ -251,29 +232,13 @@ class WLASLKeypointDataset(Dataset):
     """
     Keypoint-based dataset compatible with SLRNet.
     Output shape: (T, 1662) - suitable for SLRNet CNN-LSTM model.
-
-    Directory structure:
-        root/
-          accident/
-            xxxxx.mp4
-            ...
-          bed/
-            ...
     """
 
-    def __init__(
-        self,
-        root: str,
-        split: str = "train",
-        seq_len: int = KP_SEQ_LEN,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.10,
-        seed: int = 42,
-    ):
+    def __init__(self, root, split="train", seq_len=KP_SEQ_LEN,
+                 val_ratio=0.15, test_ratio=0.10, seed=42):
         self.root    = root
         self.seq_len = seq_len
 
-        # Collect all samples
         all_samples = []
         for label in LABELS:
             label_dir = os.path.join(root, label)
@@ -283,7 +248,6 @@ class WLASLKeypointDataset(Dataset):
                 if fname.endswith(".mp4"):
                     all_samples.append((os.path.join(label_dir, fname), LABEL2IDX[label]))
 
-        # Shuffle and split
         rng = np.random.default_rng(seed)
         idxs = rng.permutation(len(all_samples))
         n_test = int(len(all_samples) * test_ratio)
@@ -293,7 +257,7 @@ class WLASLKeypointDataset(Dataset):
             chosen = idxs[:n_test]
         elif split == "val":
             chosen = idxs[n_test:n_test + n_val]
-        else:  # train
+        else:
             chosen = idxs[n_test + n_val:]
 
         self.samples = [all_samples[i] for i in chosen]
@@ -310,14 +274,8 @@ class WLASLKeypointDataset(Dataset):
 
 # ─── DataLoader factory ─────────────────────────────────────────────────────
 
-def get_dataloaders(
-    root: str,
-    mode: str = "keypoint",
-    batch_size: int = 8,
-    num_workers: int = 0,
-    seq_len: int = None,
-    img_size: int = IMG_SIZE,
-):
+def get_dataloaders(root, mode="keypoint", batch_size=8, num_workers=0,
+                    seq_len=None, img_size=IMG_SIZE):
     """
     Create train/val/test DataLoaders.
 
@@ -345,18 +303,12 @@ def get_dataloaders(
     val_ds   = DatasetClass(root, split="val",   **kwargs)
     test_ds  = DatasetClass(root, split="test",  **kwargs)
 
-    train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=True
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True
-    )
-    test_loader = DataLoader(
-        test_ds, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True
-    )
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=True)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
+                             num_workers=num_workers, pin_memory=True)
 
     return train_loader, val_loader, test_loader
 

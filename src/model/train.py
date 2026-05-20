@@ -5,11 +5,11 @@ Trains the CNN-LSTM model on WLASL sign language dataset.
 Supports both Kaggle and local environments.
 
 Usage:
-    python train.py --data_dir processed --output_dir outputs --epochs 50
-    python train.py --data_dir /kaggle/input/.../processed --output_dir /kaggle/working
+    python src/model/train.py --data_dir data/processed --output_dir checkpoints --epochs 50
 """
 
 import os
+import sys
 import json
 import argparse
 import numpy as np
@@ -18,12 +18,17 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
-from model import SLRNet
+# ── Project root path setup ─────────────────────────────────────────────────
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from src.model.slrnet import SLRNet
 
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-DEFAULT_DATA_DIR   = "processed"
-DEFAULT_OUTPUT_DIR = "outputs"
+DEFAULT_DATA_DIR   = os.path.join("data", "processed")
+DEFAULT_OUTPUT_DIR = "checkpoints"
 BATCH_SIZE         = 32
 EPOCHS             = 50
 LR                 = 1e-3
@@ -161,8 +166,10 @@ def main(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Save label map for inference
-    save_label_map(class_names, args.output_dir)
+    # Save label map for inference (to data/ directory)
+    data_dir_root = os.path.join(ROOT, "data")
+    os.makedirs(data_dir_root, exist_ok=True)
+    save_label_map(class_names, data_dir_root)
 
     # Save training config for reproducibility
     train_config = {
@@ -228,7 +235,9 @@ def main(args):
     print(f"\nBest val_loss: {best_val_loss:.4f}")
 
     # ── Save training history ───────────────────────────────────────────
-    history_path = os.path.join(args.output_dir, "history.npy")
+    results_dir = os.path.join(ROOT, "results")
+    os.makedirs(results_dir, exist_ok=True)
+    history_path = os.path.join(results_dir, "history.npy")
     np.save(history_path, history)
     print(f"Training history saved to: {history_path}")
 
@@ -277,7 +286,7 @@ def main(args):
         ax.set_title("Confusion Matrix — SLRNet")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
-        cm_path = os.path.join(args.output_dir, "confusion_matrix.png")
+        cm_path = os.path.join(results_dir, "confusion_matrix.png")
         plt.savefig(cm_path, dpi=150)
         plt.close()
         print(f"Confusion matrix saved to: {cm_path}")
@@ -294,7 +303,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir",   type=str,   default=DEFAULT_DATA_DIR,
                         help="Directory containing preprocessed .npy files")
     parser.add_argument("--output_dir", type=str,   default=DEFAULT_OUTPUT_DIR,
-                        help="Directory to save model checkpoints and outputs")
+                        help="Directory to save model checkpoints")
     parser.add_argument("--epochs",     type=int,   default=EPOCHS)
     parser.add_argument("--batch_size", type=int,   default=BATCH_SIZE)
     parser.add_argument("--lr",         type=float, default=LR)

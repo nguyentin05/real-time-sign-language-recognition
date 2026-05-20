@@ -1,32 +1,44 @@
 """
-Integration test for SLRNet model pipeline.
+evaluate.py — Đánh giá mô hình SLRNet
 
-Tests:
-1. Model architecture (forward pass, predict_proba)
-2. Model save/load consistency
-3. Simulated training loop (1 epoch on synthetic data)
-4. Keypoint extraction dimensions (without camera)
+Gồm:
+  1. Integration tests (kiểm tra architecture, save/load, training loop)
+  2. Folder evaluation (đánh giá trên thư mục video)
+
+Usage:
+    python src/evaluation/evaluate.py --mode test
+    python src/evaluation/evaluate.py --mode eval --data_root data/raw_videos
 """
 
 import os
 import sys
 import json
-import tempfile
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
-from model import SLRNet
+# ── Project root path setup ─────────────────────────────────────────────────
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from src.model.slrnet import SLRNet
 
 # ── Configuration ───────────────────────────────────────────────────────────
 NUM_CLASSES   = 10
 INPUT_SIZE    = 1662
 SEQ_LEN       = 30
 BATCH_SIZE    = 4
-NUM_SAMPLES   = 32   # small synthetic dataset
+NUM_SAMPLES   = 32
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Integration Tests
+# ═══════════════════════════════════════════════════════════════════════════
 
 def test_model_architecture():
     """Test 1: Model architecture and shapes."""
@@ -36,7 +48,6 @@ def test_model_architecture():
 
     model = SLRNet(input_size=INPUT_SIZE, num_classes=NUM_CLASSES)
 
-    # Parameter counts (must match Kaggle notebook)
     total  = sum(p.numel() for p in model.parameters())
     cnn_p  = sum(p.numel() for p in model.cnn.parameters())
     lstm_p = sum(p.numel() for n, p in model.named_parameters() if "lstm" in n)
@@ -49,23 +60,16 @@ def test_model_architecture():
 
     assert total == 416_682,  f"Expected 416,682 params, got {total:,}"
     assert cnn_p == 35_648,   f"Expected 35,648 CNN params, got {cnn_p:,}"
-    # lstm_p might not match exactly depending on if we count frame_fc or not, but we check total
-    # Let's just check total params for simplicity since architecture changed
-    # assert lstm_p == ...
 
-    # Forward pass shape
     x = torch.randn(BATCH_SIZE, SEQ_LEN, INPUT_SIZE)
     out = model(x)
     assert out.shape == (BATCH_SIZE, NUM_CLASSES), \
         f"Expected output shape ({BATCH_SIZE}, {NUM_CLASSES}), got {out.shape}"
 
-    # predict_proba shape and sum
     probs = model.predict_proba(x)
-    assert probs.shape == (BATCH_SIZE, NUM_CLASSES), \
-        f"Expected probs shape ({BATCH_SIZE}, {NUM_CLASSES}), got {probs.shape}"
+    assert probs.shape == (BATCH_SIZE, NUM_CLASSES)
     sums = probs.sum(dim=-1)
-    assert torch.allclose(sums, torch.ones(BATCH_SIZE), atol=1e-5), \
-        f"Probs should sum to 1.0, got {sums}"
+    assert torch.allclose(sums, torch.ones(BATCH_SIZE), atol=1e-5)
 
     print("  [PASS] All architecture checks passed!")
     return True
@@ -78,19 +82,15 @@ def test_save_load():
     print("=" * 60)
 
     model = SLRNet(input_size=INPUT_SIZE, num_classes=NUM_CLASSES)
-    model.eval()  # Disable dropout for deterministic comparison
+    model.eval()
     x = torch.randn(1, SEQ_LEN, INPUT_SIZE)
 
     with torch.no_grad():
         out_before = model(x)
 
-    # Save to temp file
-    tmp = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "_test_model_tmp.pt"
-    )
+    tmp = os.path.join(ROOT, "_test_model_tmp.pt")
     torch.save(model.state_dict(), tmp)
 
-    # Load into new model
     model2 = SLRNet(input_size=INPUT_SIZE, num_classes=NUM_CLASSES)
     model2.load_state_dict(torch.load(tmp, map_location="cpu", weights_only=True))
     model2.eval()
@@ -112,7 +112,6 @@ def test_training_loop():
     print("TEST 3: Training Loop (synthetic data)")
     print("=" * 60)
 
-    # Create synthetic data
     X = np.random.randn(NUM_SAMPLES, SEQ_LEN, INPUT_SIZE).astype(np.float32)
     y = np.random.randint(0, NUM_CLASSES, size=NUM_SAMPLES).astype(np.int64)
 
@@ -126,7 +125,6 @@ def test_training_loop():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    # Train 1 epoch
     model.train()
     total_loss, correct = 0.0, 0
     for X_batch, y_batch in loader:
@@ -141,13 +139,6 @@ def test_training_loop():
     avg_loss = total_loss / NUM_SAMPLES
     acc = correct / NUM_SAMPLES
     print(f"  Epoch 1 — Loss: {avg_loss:.4f} | Acc: {acc:.4f}")
-
-    # Evaluate
-    model.eval()
-    with torch.no_grad():
-        X_tensor = torch.tensor(X, dtype=torch.float32)
-        preds = model(X_tensor).argmax(1).numpy()
-    print(f"  Predictions range: [{preds.min()}, {preds.max()}]")
 
     assert avg_loss > 0, "Loss should be positive"
     assert 0 <= acc <= 1, "Accuracy should be in [0, 1]"
@@ -169,9 +160,7 @@ def test_label_map():
     label_map = {name: idx for idx, name in enumerate(class_names)}
     idx_to_label = {v: k for k, v in label_map.items()}
 
-    tmp = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "_test_label_map.json"
-    )
+    tmp = os.path.join(ROOT, "_test_label_map.json")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(label_map, f, indent=2)
 
@@ -194,7 +183,6 @@ def test_keypoint_dimensions():
     print("TEST 5: Keypoint Vector Dimensions")
     print("=" * 60)
 
-    # Simulate what extract_keypoints returns (without mediapipe)
     pose_size  = 33 * 4    # 132
     face_size  = 468 * 3   # 1404
     lh_size    = 21 * 3    # 63
@@ -209,23 +197,22 @@ def test_keypoint_dimensions():
 
     assert total_size == 1662, f"Expected 1662, got {total_size}"
 
-    # Test with simulated zero-filled keypoints
     keypoints = np.zeros(total_size)
-    assert keypoints.shape == (1662,), f"Expected (1662,), got {keypoints.shape}"
+    assert keypoints.shape == (1662,)
 
-    # Verify model accepts this
     model = SLRNet(input_size=1662, num_classes=10)
     model.eval()
     sequence = np.stack([keypoints] * SEQ_LEN)  # (30, 1662)
-    X = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0)  # (1, 30, 1662)
+    X = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0)
     with torch.no_grad():
         probs = model.predict_proba(X)
-    assert probs.shape == (1, 10), f"Expected (1, 10), got {probs.shape}"
+    assert probs.shape == (1, 10)
     print("  [PASS] Keypoint dimensions match model input!")
     return True
 
 
-if __name__ == "__main__":
+def run_tests():
+    """Run all integration tests."""
     print("\n[TEST] SLRNet Integration Test Suite")
     print("=" * 60)
 
@@ -261,3 +248,96 @@ if __name__ == "__main__":
     else:
         print(">>> Some tests FAILED.")
         sys.exit(1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Folder Evaluation
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _resolve_model_path(path: str) -> str:
+    """Try multiple paths/extensions to find the model checkpoint."""
+    for p in [path, path.replace(".pth", ".pt"), path.replace(".pt", ".pth"),
+              os.path.join(ROOT, "checkpoints", os.path.basename(path))]:
+        if os.path.isfile(p):
+            return p
+    raise FileNotFoundError(f"Model file not found: {path}")
+
+
+def load_label_map(path: str, num_classes: int) -> dict:
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            lm = json.load(f)
+        idx_map = {v: k for k, v in lm.items()}
+        if len(idx_map) != num_classes:
+            print(f"  [WARN] Label map has {len(idx_map)} classes but model expects {num_classes}.")
+            return {i: f"class_{i}" for i in range(num_classes)}
+        return idx_map
+    print(f"  [WARN] Label map not found: {path}. Using default.")
+    return {i: f"class_{i}" for i in range(num_classes)}
+
+
+def evaluate_folder(checkpoint_path, label_map_path, data_root):
+    """Evaluate model on a folder of videos organized by label."""
+    resolved = _resolve_model_path(checkpoint_path)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    state = torch.load(resolved, map_location=device, weights_only=True)
+    nc = state["fc.3.weight"].shape[0]
+    model = SLRNet(input_size=1662, num_classes=nc).to(device)
+    model.load_state_dict(state)
+    model.eval()
+
+    idx_to_label = load_label_map(label_map_path, nc)
+    print(f"[Evaluate] Model loaded. Device: {device}, Classes: {nc}")
+
+    from src.data.preprocess import load_video_keypoints
+
+    correct, total, per_class = 0, 0, {}
+
+    for label in idx_to_label.values():
+        label_dir = os.path.join(data_root, label)
+        if not os.path.isdir(label_dir):
+            continue
+        per_class[label] = {"correct": 0, "total": 0}
+        for fname in sorted(os.listdir(label_dir)):
+            if not fname.endswith(".mp4"):
+                continue
+            try:
+                kp = load_video_keypoints(os.path.join(label_dir, fname), 30)
+                clip = torch.tensor(kp, dtype=torch.float32).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    pred_label = idx_to_label[model(clip).argmax(1).item()]
+                total += 1
+                per_class[label]["total"] += 1
+                if pred_label == label:
+                    correct += 1
+                    per_class[label]["correct"] += 1
+            except Exception as e:
+                print(f"Error: {e}")
+
+    if total == 0:
+        print("No videos found.")
+        return
+    print(f"\nOverall accuracy: {correct}/{total} = {100*correct/total:.1f}%\n")
+    for word, s in sorted(per_class.items()):
+        if s["total"] > 0:
+            print(f"  {word:>15}: {100*s['correct']/s['total']:5.1f}%  ({s['correct']}/{s['total']})")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SLRNet Evaluation & Tests")
+    parser.add_argument("--mode", default="test", choices=["test", "eval"],
+                        help="test: integration tests | eval: folder evaluation")
+    parser.add_argument("--model", default="model_best.pth", help="Model checkpoint path")
+    parser.add_argument("--label_map", default=os.path.join("data", "label_map.json"))
+    parser.add_argument("--data_root", default=os.path.join("data", "raw_videos"))
+    args = parser.parse_args()
+
+    if args.mode == "test":
+        run_tests()
+    else:
+        evaluate_folder(args.model, args.label_map, args.data_root)
